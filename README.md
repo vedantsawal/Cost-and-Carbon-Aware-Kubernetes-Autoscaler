@@ -57,12 +57,4 @@ Demo scripts validate scaling and monitoring behavior in real time.
 ./demo_41_observe_cost_nodes.sh  # Summarize node pool, cost, and carbon data
 ```
 
-## Visualization
-
-**Grafana:** [http://127.0.0.1:3000](http://127.0.0.1:3000)  
-Tracks metrics such as node count, pods per node, latency, and workload phases.
-
-**OpenCost:** [http://127.0.0.1:9090](http://127.0.0.1:9090)  
-Displays live cost distribution between Spot and On-Demand pools.
-
 
