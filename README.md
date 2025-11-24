@@ -56,5 +56,27 @@ Demo scripts validate scaling and monitoring behavior in real time.
 ./demo_30_burst_configure.sh     # Simulate burst workload and autoscaling
 ./demo_41_observe_cost_nodes.sh  # Summarize node pool, cost, and carbon data
 ```
+## How to Reproduce
 
+1. **Clone the repository:**
+   ```bash
+   git clone https://github.com/vedantsawal/Cost-and-Carbon-Aware-Kubernetes-Autoscaler.git
+   cd Cost-and-Carbon-Aware-Kubernetes-Autoscaler
+
+2. Export AWS credentials and environment variables (.env). Make sure your AWS access credentials and region settings are configured.
+3. Run setup scripts sequentially:
+   ```bash
+   ./00_common.sh
+   ./01_cluster.sh
+   ./02_pod_identity_cni.sh
+   ./03_monitoring.sh
+   ./05_karpenter.sh
+   ./06_opencost.sh
+   ```
+## Results Summary
+
+- Off-Peak mode uses Spot nodes to reduce cost and carbon impact.
+- Peak mode uses On-Demand nodes to maintain reliability.
+- OpenCost displays live cost savings and node usage.
+- Grafana shows autoscaling behavior such as pod distribution, latency, and resource usage in real time.
 
