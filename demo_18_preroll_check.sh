@@ -64,6 +64,22 @@ for PORT in 3000 8005 9090; do
 done
 echo "✅ No port-forwards running."
 
+echo "[Check] aws-auth has Karpenter node role mapping..."
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+NODE_ROLE_ARN="arn:aws:iam::${ACCOUNT_ID}:role/KarpenterNodeRole-${CLUSTER_NAME}"
+
+if kubectl -n kube-system get configmap aws-auth -o yaml \
+  | grep -q "$NODE_ROLE_ARN"; then
+  echo "✅ aws-auth contains $NODE_ROLE_ARN"
+else
+  echo "⚠️  aws-auth is missing $NODE_ROLE_ARN"
+  echo "    Run:"
+  echo "      eksctl create iamidentitymapping --cluster $CLUSTER_NAME --region $AWS_REGION \\"
+  echo "        --arn $NODE_ROLE_ARN --username 'system:node:{{EC2PrivateDNSName}}' \\"
+  echo "        --group system:bootstrappers --group system:nodes"
+  exit 1
+fi
+
 echo
 echo "[Pre-roll 18] ✅ All good. You can start running:"
 echo "   ./demo_20_offpeak_configure.sh"

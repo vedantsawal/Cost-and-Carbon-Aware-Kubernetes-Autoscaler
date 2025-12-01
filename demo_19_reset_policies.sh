@@ -1,95 +1,64 @@
 #!/usr/bin/env bash
-# demo_19_reset_policies.sh
-# Purpose: Undo/neutralize the effects of demo_20_offpeak_configure.sh,
-#          demo_21_peak_configure.sh, and demo_30_burst_configure.sh
-#          while keeping base setup intact.
-set -euo pipefail
+# demo_19_reset_policies.sh — normalize NodePool disruption + (optionally) clean stale port-forwards
+set -Eeuo pipefail
 
-if [[ -f "./demo_00_env.sh" ]]; then
-  # shellcheck disable=SC1091
-  source ./demo_00_env.sh
+# ==== Demo env (prints CLUSTER/REGION/NS banner like others) ====
+source "$(dirname "$0")/demo_00_env.sh"
+
+: "${RESET_KILL_PF:=true}"          # set to "false" to skip PF cleanup
+: "${PF_PORTS:="3000 8005 9090"}"   # override if you use different local ports
+
+NP_SPOT="spot-preferred"
+NP_OD="on-demand-slo"
+echo "[Reset 19] Cluster=${CLUSTER_NAME}  Region=${AWS_REGION}"
+echo "[Reset 19] Target NodePools: ${NP_SPOT}, ${NP_OD}"
+
+# ---- Helper: patch NodePool safely ----
+patch_np() {
+  local np="$1"
+  if kubectl get nodepool "${np}" >/dev/null 2>&1; then
+    # Ensure consolidationPolicy=WhenEmpty and consolidateAfter is present (required by validation)
+    echo "[Reset 19] ${np}: setting consolidationPolicy=WhenEmpty, consolidateAfter=30s"
+    kubectl patch nodepool "${np}" --type=merge -p '{
+      "spec": {
+        "disruption": {
+          "consolidationPolicy": "WhenEmpty",
+          "consolidateAfter": "30s"
+        }
+      }
+    }' >/dev/null
+  else
+    echo "[Reset 19] ${np}: not found, skipping"
+  fi
+}
+
+patch_np "${NP_SPOT}"
+patch_np "${NP_OD}"
+
+# ---- Optional: clean only kubectl port-forwards on common demo ports ----
+if [[ "${RESET_KILL_PF}" == "true" ]]; then
+  echo "[Reset 19] Cleaning stale kubectl port-forwards on ports: ${PF_PORTS}"
+  for p in ${PF_PORTS}; do
+    # Kill only kubectl PFs that expose :PORT on localhost
+    # (safe against other processes that may also listen on these ports)
+    pkill -f "kubectl .*port-forward .*:${p}(\\b|$)" 2>/dev/null || true
+  done
+
+  # Show any survivors (useful for debugging)
+  for p in ${PF_PORTS}; do
+    if lsof -i :"${p}" >/dev/null 2>&1; then
+      echo "[Reset 19] ⚠️ Port ${p} still in use:"
+      lsof -i :"${p}" || true
+    else
+      echo "[Reset 19] ✅ Port ${p} is free"
+    fi
+  done
+else
+  echo "[Reset 19] Skipping port-forward cleanup (RESET_KILL_PF=false)"
 fi
 
-: "${CLUSTER_NAME:?Set CLUSTER_NAME}"
-: "${AWS_REGION:?Set AWS_REGION}"
-: "${NS:=nov-22}"
-: "${NAMESPACE:=${NS}}"
-: "${NP_SPOT:=spot-preferred}"
-: "${NP_OD:=on-demand-slo}"
-
-echo "[Reset 19] Cluster=${CLUSTER_NAME}  Region=${AWS_REGION}  Namespace=${NAMESPACE}"
-echo "[Reset 19] NodePools: spot=${NP_SPOT}  on-demand=${NP_OD}"
-
-echo
-echo "[A] Remove burst workloads (group=scale-burst) …"
-kubectl -n "${NAMESPACE}" delete deploy -l group=scale-burst --ignore-not-found
-kubectl -n "${NAMESPACE}" delete svc -l group=scale-burst --ignore-not-found || true
-kubectl -n "${NAMESPACE}" get pods -o wide || true
-
-echo
-echo "[B] Neutralize NodePool policies …"
-read -r -d '' SPOT_JSON <<'JSON'
-{
-  "spec": {
-    "disruption": {
-      "consolidateAfter": "30s",
-      "consolidationPolicy": "WhenEmpty",
-      "budgets": [ { "nodes": "10%" } ]
-    },
-    "template": {
-      "spec": {
-        "expireAfter": "720h",
-        "requirements": [
-          { "key": "karpenter.k8s.aws/instance-category", "operator": "In", "values": ["c","m","r"] },
-          { "key": "karpenter.sh/capacity-type",          "operator": "In", "values": ["spot"] }
-        ]
-      }
-    }
-  }
-}
-JSON
-
-read -r -d '' OD_JSON <<'JSON'
-{
-  "spec": {
-    "disruption": {
-      "consolidateAfter": "30s",
-      "consolidationPolicy": "WhenEmpty",
-      "budgets": [ { "nodes": "10%" } ]
-    },
-    "template": {
-      "spec": {
-        "expireAfter": "720h",
-        "requirements": [
-          { "key": "karpenter.k8s.aws/instance-category", "operator": "In", "values": ["c","m","r"] },
-          { "key": "karpenter.sh/capacity-type",          "operator": "In", "values": ["on-demand"] }
-        ]
-      }
-    }
-  }
-}
-JSON
-
-echo "[B1] Patch ${NP_SPOT} …"
-kubectl patch nodepool "${NP_SPOT}" --type merge -p "${SPOT_JSON}"
-echo "[B2] Patch ${NP_OD} …"
-kubectl patch nodepool "${NP_OD}" --type merge -p "${OD_JSON}"
-
-echo
-echo "[C] Verify NodePool specs (snippet) …"
-echo "# ${NP_SPOT}"
-kubectl get nodepool "${NP_SPOT}" -o json | jq '.spec.disruption, .spec.template.spec.requirements'
-echo "# ${NP_OD}"
-kubectl get nodepool "${NP_OD}" -o json | jq '.spec.disruption, .spec.template.spec.requirements'
-
-echo
-echo "[D] Live status …"
-kubectl get nodepool -o wide
-kubectl get nodeclaims.karpenter.sh -o wide || true
-kubectl get nodes -L karpenter.sh/nodepool,karpenter.sh/capacity-type,node.kubernetes.io/instance-type -o wide
-
-echo
-echo "[Reset 19] Done. Re-run:"
-echo "  ./demo_20_offpeak_configure.sh"
-echo "  ./demo_21_peak_configure.sh"
-echo "  ./demo_30_burst_configure.sh"
+# ---- Verify final state ----
+echo "[Verify] NodePool readiness (last condition):"
+kubectl get nodepool -o jsonpath='{range .items[*]}{.metadata.name} -> {.status.conditions[-1].type} {.status.conditions[-1].status}{"\n"}{end}' || true
+echo "[Verify] Disruption policies:"
+kubectl get nodepool "${NP_SPOT}" "${NP_OD}" -o jsonpath='{range .items[*]}{.metadata.name} -> {.spec.disruption.consolidationPolicy} / {.spec.disruption.consolidateAfter}{"\n"}{end}' 2>/dev/null || true
